@@ -1,5 +1,6 @@
 use url::Url;
 use chrono::Utc;
+use serde_json::{Value};
 use ws::{CloseCode, Handshake, Message, Result, Sender, Builder};
 
 use std::env;
@@ -13,18 +14,24 @@ use std::io::Write;
 
 const HELP: &str =
     "This is a debug proxy, which dumps all messages passing through specified port.\n\
-    \nSyntax: ws-debug <server-url> <proxy-port>\n\
+    \nSyntax: ws-debug <server-url> <proxy-port> [--pretty-jsons]\n\
     \nThe only two parameters are a port number to listen and a websocket url\
     \nto redirect messages to. If a message comes from the <server-url>, it is directed\
     \nto the last client connected to the debug proxy. Looping is forbidden.\n\
+    \nYou can provide --pretty-jsons flag to pretty print jsons when they are encountered.\
     \nThe program will create a separate file for each participant.";
 
 fn main() {
+    let mut prettify_json = false;
     let args: Vec<String> = env::args().skip(1)
         .filter(|arg| {
             if arg.as_str() == "--help" {
                 println!("{}", HELP);
                 std::process::exit(0);
+            }
+            if arg.as_str() == "--pretty-jsons" {
+                prettify_json = true;
+                return false;
             }
             return true;
         })
@@ -42,13 +49,14 @@ fn main() {
                 println!("Port number {} is invalid", arg2);
                 std::process::exit(-1);
             });
-            listen(proxy_port, server_url)
+
+            listen(proxy_port, server_url, prettify_json)
         },
         _ => println!("{}", HELP)
     }
 }
 
-fn listen(proxy_port: u16, server_url: Url) {
+fn listen(proxy_port: u16, server_url: Url, prettify_json: bool) {
     env_logger::init();
     info!("Listening port {}, redirecting messages to {}", proxy_port, server_url);
 
@@ -63,7 +71,8 @@ fn listen(proxy_port: u16, server_url: Url) {
 
                 Handler::Server {
                     client: client.clone(),
-                    log_file: provide_file("ws-debug.server.log")
+                    log_file: provide_file("ws-debug.server.log"),
+                    prettify_json
                 }
             } else {
                 debug!("Creating handler for a client");
@@ -72,7 +81,8 @@ fn listen(proxy_port: u16, server_url: Url) {
 
                 Handler::Client {
                     server: server.borrow().as_ref().unwrap().clone(),
-                    log_file: provide_file("ws-debug.client.log")
+                    log_file: provide_file("ws-debug.client.log"),
+                    prettify_json
                 }
             }
         })
@@ -85,11 +95,13 @@ fn listen(proxy_port: u16, server_url: Url) {
 enum Handler {
     Server {
         client: Rc<RefCell<Option<Sender>>>,
-        log_file: File
+        log_file: File,
+        prettify_json: bool,
     },
     Client {
         server: Rc<Sender>,
-        log_file: File
+        log_file: File,
+        prettify_json: bool,
     }
 }
 
@@ -104,26 +116,20 @@ impl ws::Handler for Handler {
 
     fn on_message(&mut self, msg: Message) -> Result<()> {
         match self {
-            Handler::Server { client, log_file } => {
+            Handler::Server { client, log_file, prettify_json } => {
                 debug!("Redirecting message from server to client");
 
                 let client = client.borrow_mut();
                 assert!(client.is_some());
 
                 client.as_ref().unwrap().send(msg.clone()).unwrap();
-
-                log_file
-                    .write_fmt(format_args!("{} {:?}\n", Utc::now(), msg))
-                    .unwrap();
+                log_to_file(log_file, msg, *prettify_json)
             },
-            Handler::Client { server, log_file } => {
+            Handler::Client { server, log_file, prettify_json } => {
                 debug!("Redirecting message from client to server");
 
                 server.send(msg.clone()).unwrap();
-
-                log_file
-                    .write_fmt(format_args!("{} {:?}\n", Utc::now(), msg))
-                    .unwrap();
+                log_to_file(log_file, msg, *prettify_json)
             }
         }
         Ok(())
@@ -131,6 +137,44 @@ impl ws::Handler for Handler {
 
     fn on_close(&mut self, code: CloseCode, reason: &str) {
         debug!("Connection closed: code={:?}, reason=\"{}\"", code, reason);
+    }
+}
+
+fn log_to_file(file: &mut File, msg: Message, prettify_json: bool) {
+    let text = pretty_print(msg, prettify_json);
+    let result = file.write_fmt(format_args!("{} {}\n", Utc::now(), text));
+    result.unwrap_or_else(|e| {
+        error!("Error: {}", e);
+    })
+}
+
+fn pretty_print(msg: Message, prettify_json: bool) -> String {
+    match msg {
+        Message::Binary(bytes) => {
+            debug!("Binary message received while expecting a JSON");
+            format!("Binary({:?})", bytes)
+        },
+        Message::Text(raw) => {
+            if prettify_json {
+                let value: serde_json::Result<Value> = serde_json::from_str(&raw[..]);
+
+                match value {
+                    Ok(value) => {
+                        let text = serde_json::to_string_pretty(&value);
+                        text.unwrap_or_else(|e| {
+                            warn!("Error: {}", e);
+                            raw
+                        })
+                    },
+                    Err(e) => {
+                        warn!("Error: {}", e);
+                        return raw;
+                    }
+                }
+            } else {
+                raw
+            }
+        }
     }
 }
 
