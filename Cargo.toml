@@ -1,0 +1,11 @@
+[package]
+name = "ws-debug"
+version = "0.1.0"
+authors = ["Kirill Taran <kirill.t256@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+env_logger = "0.7.1"
+log = "0.4.0"
+url = "2.1.1"
+ws = "0.9.1"
