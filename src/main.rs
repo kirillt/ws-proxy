@@ -146,7 +146,7 @@ impl ws::Handler for Handler {
                 log_file, prettify_json
             } => {
                 debug!("Redirecting message from client to server");
-                let prefix = format!("[id: {}]", connection_id);
+                let prefix = format!("[connection id: {}]", connection_id);
 
                 server.send(msg.clone()).unwrap();
                 log_to_file(log_file, &prefix, msg, *prettify_json)
@@ -182,7 +182,12 @@ fn pretty_print(msg: Message, prettify_json: bool) -> String {
 
                 match value {
                     Ok(value) => {
-                        let text = serde_json::to_string_pretty(&value);
+                        let text = serde_json::to_string_pretty(&value)
+                            .map(|mut s| {
+                                s.push('\n');
+                                return s;
+                            });
+
                         text.unwrap_or_else(|e| {
                             warn!("Error: {}", e);
                             raw
