@@ -4,7 +4,7 @@ use serde_json::{Value};
 use ws::{CloseCode, Handshake, Message, Result, Sender, Builder};
 
 use std::env;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::net::SocketAddr;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -19,7 +19,9 @@ const HELP: &str =
     \nto redirect messages to. If a message comes from the <server-url>, it is directed\
     \nto the last client connected to the debug proxy. Looping is forbidden.\n\
     \nYou can provide --pretty-jsons flag to pretty print jsons when they are encountered.\
-    \nThe program will create a separate file for each participant.";
+    \nThe program will create a separate file for server and client.";
+
+const SERVER_PREFIX: &str = "[server]";
 
 fn main() {
     let mut prettify_json = false;
@@ -63,25 +65,38 @@ fn listen(proxy_port: u16, server_url: Url, prettify_json: bool) {
     let server: RefCell<Option<Rc<Sender>>> = RefCell::new(None);
     let client: Rc<RefCell<Option<Sender>>> = Rc::new(RefCell::new(None));
 
+    let server_label = server_url.to_string();
+
     let mut ws = Builder::new()
         .build(|out: Sender| {
             if out.connection_id() == 0 {
                 debug!("Creating handler for the server");
                 *server.borrow_mut() = Some(Rc::new(out));
 
+                let mut file = provide_file("ws-debug.server.log");
+                file.write_fmt(format_args!("{} Proxy connected to the server at {}\n",
+                    Utc::now(), server_label)).unwrap();
+
                 Handler::Server {
                     client: client.clone(),
-                    log_file: provide_file("ws-debug.server.log"),
+                    log_file: file,
                     prettify_json
                 }
             } else {
                 debug!("Creating handler for a client");
+                let id = out.connection_id();
+
                 let mut client = client.borrow_mut();
                 *client = Some(out);
 
+                let mut file = provide_file("ws-debug.client.log");
+                file.write_fmt(format_args!("{} Client connected to the proxy with id {}\n",
+                    Utc::now(), id)).unwrap();
+
                 Handler::Client {
                     server: server.borrow().as_ref().unwrap().clone(),
-                    log_file: provide_file("ws-debug.client.log"),
+                    connection_id: id,
+                    log_file: file,
                     prettify_json
                 }
             }
@@ -100,6 +115,7 @@ enum Handler {
     },
     Client {
         server: Rc<Sender>,
+        connection_id: u32,
         log_file: File,
         prettify_json: bool,
     }
@@ -123,13 +139,17 @@ impl ws::Handler for Handler {
                 assert!(client.is_some());
 
                 client.as_ref().unwrap().send(msg.clone()).unwrap();
-                log_to_file(log_file, msg, *prettify_json)
+                log_to_file(log_file, SERVER_PREFIX, msg, *prettify_json)
             },
-            Handler::Client { server, log_file, prettify_json } => {
+            Handler::Client {
+                server, connection_id,
+                log_file, prettify_json
+            } => {
                 debug!("Redirecting message from client to server");
+                let prefix = format!("[id: {}]", connection_id);
 
                 server.send(msg.clone()).unwrap();
-                log_to_file(log_file, msg, *prettify_json)
+                log_to_file(log_file, &prefix, msg, *prettify_json)
             }
         }
         Ok(())
@@ -140,9 +160,11 @@ impl ws::Handler for Handler {
     }
 }
 
-fn log_to_file(file: &mut File, msg: Message, prettify_json: bool) {
+fn log_to_file(file: &mut File, prefix: &str, msg: Message, prettify_json: bool) {
     let text = pretty_print(msg, prettify_json);
-    let result = file.write_fmt(format_args!("{} {}\n", Utc::now(), text));
+    let result = file.write_fmt(format_args!("{} {} {}",
+        Utc::now(), prefix, text));
+
     result.unwrap_or_else(|e| {
         error!("Error: {}", e);
     })
@@ -178,9 +200,14 @@ fn pretty_print(msg: Message, prettify_json: bool) -> String {
     }
 }
 
+//todo: manage resource release
 fn provide_file(name: &str) -> File {
-    //todo: manage resource release
-    let file = File::create(name.clone());
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(name.clone());
+
     file.unwrap_or_else(|e| {
         error!("Error: {}", e);
         println!("Failed to create file {}", name);
