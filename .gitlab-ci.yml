@@ -1,0 +1,17 @@
+stages:
+  - build
+  - publish
+
+build:
+  stage: build
+  script:
+    - docker build --no-cache --squash -t ws-proxy .
+
+publish:
+  stage: publish
+  script:
+    - docker login -u kirillt -p $DOCKERHUB_TOKEN
+    - docker tag ws-proxy kirillt/ws-proxy:$CI_COMMIT_SHORT_SHA
+    - docker tag ws-proxy kirillt/ws-proxy:latest
+    - docker push kirillt/ws-proxy:$CI_COMMIT_SHORT_SHA
+    - docker push kirillt/ws-proxy:latest

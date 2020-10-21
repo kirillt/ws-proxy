@@ -13,8 +13,8 @@ use log::{info, warn, error, debug, log_enabled, Level};
 use std::io::Write;
 
 const HELP: &str =
-    "This is a debug proxy, which dumps all messages passing through specified port.\n\
-    \nSyntax: ws-debug <server-url> <proxy-port> [--pretty-jsons]\n\
+    "This is a proxy, which dumps all messages passing through specified port.\n\
+    \nSyntax: ws-proxy <server-url> <proxy-port> [--pretty-jsons]\n\
     \nThe only two parameters are a port number to listen and a websocket url\
     \nto redirect messages to. If a message comes from the <server-url>, it is directed\
     \nto the last client connected to the debug proxy. Looping is forbidden.\n\
@@ -73,7 +73,7 @@ fn listen(proxy_port: u16, server_url: Url, prettify_json: bool) {
                 debug!("Creating handler for the server");
                 *server.borrow_mut() = Some(Rc::new(out));
 
-                let mut file = provide_file("ws-debug.server.log");
+                let mut file = provide_file("ws-proxy.server.log");
                 file.write_fmt(format_args!("{} Proxy connected to the server at {}\n",
                     Utc::now(), server_label)).unwrap();
 
@@ -89,7 +89,7 @@ fn listen(proxy_port: u16, server_url: Url, prettify_json: bool) {
                 let mut client = client.borrow_mut();
                 *client = Some(out);
 
-                let mut file = provide_file("ws-debug.client.log");
+                let mut file = provide_file("ws-proxy.client.log");
                 file.write_fmt(format_args!("{} Client connected to the proxy with id {}\n",
                     Utc::now(), id)).unwrap();
 
